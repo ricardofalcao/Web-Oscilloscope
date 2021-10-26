@@ -34,6 +34,7 @@ export default {
 	input: 'src/main.ts',
 	output: {
 		sourcemap: true,
+		strict: false,
 		format: 'iife',
 		name: 'app',
 		file: 'public/build/bundle.js'

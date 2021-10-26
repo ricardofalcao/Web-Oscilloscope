@@ -1,114 +1,172 @@
 <script lang="ts">
 	import { Chart, registerables } from "chart.js";
-
 	import zoomPlugin from "chartjs-plugin-zoom";
-
 	import "chartjs-adapter-luxon";
 	import ChartStreaming from "chartjs-plugin-streaming";
 
+	Chart.register(...registerables);
+	Chart.register(zoomPlugin);
+	Chart.register(ChartStreaming);
+
 	import { onMount } from "svelte";
 
-	export let chartCanvas: HTMLCanvasElement;
+	export let canvas: HTMLCanvasElement;
+
+	const serial_supported = "serial" in navigator;
 
 	let chart: Chart;
+	let currentData = [];
 
-	let i = 0.0;
+	let pallete = ["red", "blue", "green", "yellow"];
 
 	onMount(async () => {
-		const ctx = chartCanvas.getContext("2d");
+		let datasets = [];
 
-		Chart.register(...registerables);
-		Chart.register(zoomPlugin);
-		Chart.register(ChartStreaming);
+		for (let i = 0; i < pallete.length; i++) {
+			datasets.push({
+				label: `Channel #${i + 1}`,
+				borderColor: pallete[i],
+				backgroundColor: pallete[i],
+				pointRadius: 0,
+				pointHoverRadius: 0,
+				data: [],
+			});
+		}
 
-		chart = new Chart(ctx, {
+		chart = new Chart(canvas, {
 			type: "line",
 			data: {
-				datasets: [
-					{
-						label: "Channel 1",
-						backgroundColor: "rgb(255, 99, 132)",
-						borderColor: "rgb(255, 99, 132)",
-						data: [],
-					},
-				],
+				datasets: datasets,
 			},
 			options: {
-				elements: {
-                    point:{
-                        radius: 0
-                    }
-                },
+				parsing: false,
+				normalized: true,
+				animation: false,
+				spanGaps: true,
 				plugins: {
-					// Change options for ALL axes of THIS CHART
-					streaming: {
-						duration: 10000,
-						frameRate: 30,
+					decimation: {
+						enabled: true,
+						algorithm: 'min-max',
+					},
+					tooltip: {
+						enabled: false,
 					},
 					zoom: {
 						// Assume x axis has the realtime scale
 						pan: {
-							enabled: true, // Enable panning
-							mode: "x", // Allow panning in the x direction
+							enabled: true,        // Enable panning
+							mode: 'x'             // Allow panning in the x direction
 						},
+
 						zoom: {
 							pinch: {
-								enabled: true, // Enable pinch zooming
+								enabled: true       // Enable pinch zooming
 							},
+							
 							wheel: {
-								enabled: true, // Enable wheel zooming
+								enabled: true       // Enable wheel zooming
 							},
-							mode: "x", // Allow zooming in the x direction
+
+							mode: 'x'             // Allow zooming in the x direction
 						},
+
 						limits: {
 							x: {
-								minDelay: 1000, // Min value of the delay option
-								maxDelay: 100, // Max value of the delay option
-								minDuration: 1000, // Min value of the duration option
-								maxDuration: 10000, // Max value of the duration option
+								minDelay: 40,     // Min value of the delay option
+								maxDelay: 200,     // Max value of the delay option
+								minDuration: 1000,  // Min value of the duration option
+								maxDuration: 5000,   // Max value of the duration option
 							}
-						},
-					},
+						}
+					}
 				},
 				scales: {
 					x: {
 						type: "realtime",
-						// Change options only for THIS AXIS
+						display: false,
 						realtime: {
-							delay: 2000,
-							duration: 10000,
+							duration: 4000,
+							delay: 200,
+							refresh: 50,
+							frameRate: 60,
+							onRefresh: (chart) => {
+								for (
+									let i = 0;
+									i <
+									Math.min(
+										currentData.length,
+										pallete.length
+									);
+									i++
+								) {
+									chart.data.datasets[i].data.push(
+										currentData[i]
+									);
+								}
+
+								currentData.length = 0;
+							},
 						}
 					},
 					y: {
-						type: "linear",
-						min: 0 -0.5,
+						title: {
+							display: true,
+						},
+						min: -(3.3 + 0.5),
 						max: 3.3 + 0.5,
 					},
-				},
+				}
 			},
 		});
 
-		setInterval(async () => {
-			// append the new data to the existing chart data
-			chart.data.datasets[0].data.push({
-				x: Date.now(),
-				y: i,
-			});
+		const port = await navigator.serial.requestPort();
+		await port.open({ baudRate: 115200 });
 
-			if (i >= 3.3) {
-				i = 0;
-			} else {
-				i+= 0.01;
+		const decoder = new TextDecoderStream();
+		port.readable.pipeTo(decoder.writable);
+
+		const reader = decoder.readable.getReader();
+
+		let buffer = "";
+
+		while (true) {
+			const { value, done } = await reader.read();
+
+			if (done) {
+				// Allow the serial port to be closed later.
+				reader.releaseLock();
+				break;
 			}
 
-			// update chart datasets keeping the current animation
-			chart.update("quiet");
-		}, 10);
+			buffer += value;
+
+			let index: number;
+			while ((index = buffer.indexOf("\n")) != -1) {
+				let line = buffer.slice(0, index - 1);
+
+				const header = "TRACE:";
+				if (line.startsWith(header)) {
+					let split = line.substring(header.length).split(";");
+					currentData = split.map((element) => {
+						return {
+							x: Date.now(),
+							y: parseFloat(element),
+						};
+					});
+				}
+
+				buffer = buffer.slice(index + 1);
+			}
+		}
 	});
 </script>
 
 <main>
-	<canvas bind:this={chartCanvas} width="16" height="6" />
+	{#if serial_supported}
+		<canvas bind:this={canvas} />
+	{:else}
+		<p>The Web Serial API is not supported in this browser.</p>
+	{/if}
 </main>
 
 <style>
